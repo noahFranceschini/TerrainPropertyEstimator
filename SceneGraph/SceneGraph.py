@@ -1,4 +1,6 @@
 import numpy as np
+import klampt
+
 from klampt.math import se3
 from collections import deque
 class BaseGraphNode:
@@ -13,19 +15,41 @@ class BaseGraphNode:
                            matrix and t is a 3x1 list of a flattened
                            translation matrix.
         - children (list): list of children nodes
+        - type (str): specifies the node's type. This currently includes,
+                      - Geometry
+                      - TODO:Robot
+                      - TODO:Sensor
+                      - TODO:Map
+        - is_attached (bool): specifies if this node is attached to its
+                              parent node. If false then updates to
+                              the parent transform will apply updates
+                              to this node to reflect the node remaining
+                              static w.r.t the parent
     """
 
-    def __init__(self, name, transform, parents=None):
+    def __init__(self, name=None, transform=None, type="Base", is_attached=True):
         self.name = name
         self.transform = transform
         self.children = []
+        self.type = type
+        self.is_attached = is_attached
 
-    def change_name(self, name: str):
+    def get_type(self, type:str):
+        return type
+
+    def set_name(self, name: str):
         self.name = name
     
-    def change_transform(self, T):
+    def set_transform(self, T):
         self.transform = T
 
+    def update_transform(self, T):
+        r"""
+        Similar to change_transform but will
+        update the transform of children with
+        is_attached set to True
+        """
+        old_transform = self.T
     def get_children(self) -> list:
         return self.children
     
@@ -45,6 +69,79 @@ class BaseGraphNode:
             names.append(child.name)
         return names
 
+class GeometryNode(BaseGraphNode):
+    r"""
+    An extension of the base class node
+    representing collidable geometries within
+    the world. Utilizes klampt Geometry3D classes
+    for storing geometry information
+
+    Attributes:
+        - geometry (Geometry3D): the klampt Geometry3D class
+                                 representing this node's 
+                                 geometry
+    """
+
+    def __init__(self, name, transform=None, fn=None):
+        r"""
+        Creates a GeometryNode. If fn is specified, will load
+        a geometry from the specified file.
+        """
+        super().__init__(name, transform, "Geometry")
+
+        # load specified geometry
+        if fn is not None:
+            self.load_geometry(fn)
+        else:
+            self.geometry = None
+
+    def get_geometry(self):
+        return self.geometry
+    
+    def get_geometry_type(self):
+        return self.geometry.type()   
+    
+    def load_geometry(self, fn):
+        r"""
+        Loads and sets the geometry from a specified
+        file
+        """
+        geom = klampt.Geometry3D()
+        geom.loadFile(fn)
+        self.geometry = geom
+
+    def set(self, geom: 'klampt.Geometry3D'):
+        r"""
+        Sets the current geometry as a copy of
+        the specified geometry
+        """
+        self.geometry.set(geom)
+
+    def set_as(self, type: str, *args):
+        r"""
+        Sets the current geometry to a the new
+        specified type of geometry. See http://motion.cs.illinois.edu/software/klampt/latest/pyklampt_docs/Manual-Geometry/#geometric-representations
+        for full type support.
+
+        :param type: a string specifying the geometry type to set
+                     the geometry as
+        :param args: geometries necessary for setting the type of
+                     geometry
+        """
+        method_name = "set" + type
+        set_method = getattr(self.geometry,method_name, None)
+
+        if callable(set_method):
+            try:
+                set_method(*args)
+            except TypeError as e:
+                print(f"set_as error: {e}")
+        else:
+            print(f"Method {method_name} not found")
+        
+    def convert(self, type: str, param: float=0):
+        pass
+    
 class SceneGraph:
     r"""
     Maintains a tree of GraphNodes, representing
@@ -95,6 +192,17 @@ class SceneGraph:
         self.root = root_node
         self.nodes[root_node.name] = root_node
 
+    def get_node(self, node_name: str) -> 'BaseGraphNode':
+        r"""
+        Returns the instance of the specified
+        BaseGraphNode. Returns None if the node
+        does not exist
+        """
+        if node_name in self.nodes.keys():
+            return self.nodes[node_name]
+        else:
+            return None
+        
     def get_node_transformation(self, node_name: str) -> tuple:
         r"""
         Returns the rigid transformation (R,t) of the
@@ -137,7 +245,7 @@ class SceneGraph:
         """
         target_node = self.nodes[target_name]
         self.nodes[new_name] = self.nodes[target_name] # replaces old key with new name
-        target_node.change_name(target_name)
+        target_node.set_name(target_name)
 
     def is_parent_of(self, parent_name: str, child_name: str) -> bool:
         r"""
