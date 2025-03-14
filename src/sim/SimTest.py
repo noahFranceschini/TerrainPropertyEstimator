@@ -77,7 +77,7 @@ def compute_arrow_transform(arrow_start: list, arrow_end:list):
     R = so3.align([0,0,1],arrow_end - arrow_start)
     return (R,t)
     
-def move_body(key,obj,step_size=0.001):
+def move_body(key,obj,step_size=0.01):
         key = key.lower()  # Normalize input
         rotation,translation = obj.getTransform()
         if key == 'q':  # Move up
@@ -117,7 +117,8 @@ if __name__ == "__main__":
     arrow.loadFile("C:/Users/Noah/Desktop/2025Research/TerrainPropertyEstimator/src/meshes/Geometries/arrow.stl")
     arrow.convert("TriangleMesh")
 
-    scoop_mesh_fn = "C:/Users/Noah/Desktop/2025Research/TerrainPropertyEstimator/src/meshes/subdivided_mesh.STL"
+    # scoop_mesh_fn = "C:/Users/Noah/Desktop/2025Research/TerrainPropertyEstimator/src/meshes/subdivided_mesh.STL"
+    scoop_mesh_fn = "C:/Users/Noah/Desktop/2025Research/TerrainPropertyEstimator/src/meshes/scoop_no_probe_assem.STL"
     default_scoop_pos = (so3.from_moment([0,np.pi/2,0]),[0,0,0.1])
     # Used to test out the simulator
     heightmap_raw = np.load('C:/Users/Noah/Desktop/2025Research/TerrainPropertyEstimator/src/HeightMapEstimation/data/height_maps/gravel_height_test_0.npy')
@@ -161,6 +162,7 @@ if __name__ == "__main__":
     vis.show()
 
     while vis.shown():
+
         if len(logging) != 0:
             event = logging.popleft()
         else:
@@ -168,6 +170,7 @@ if __name__ == "__main__":
             key = "null"
             vis.update()
             time.sleep(1.0/30.0)
+
             continue
         if event[0] == "keyboard":
             key = event[1]
@@ -178,7 +181,9 @@ if __name__ == "__main__":
                 pass
             arrow_names = []
         else:
+
             continue
+        vis.lock()
         prev_transform = terrain_sim.elements["scoop"].getTransform()
         new_transform = move_body(key,scoop_model)
         terrain_sim.update_configuration("scoop",new_transform)
@@ -196,15 +201,16 @@ if __name__ == "__main__":
             pc.setColors(colors,color_format=('r','g','b'))
             vis.add("collisions",pc)
 
-            for i, force in enumerate(forces):
-                arrow_cpy = arrow.copy()
-                arrow_start = np.array(force_points[i])
-                arrow_end = np.array(-force) + arrow_start
-                arrow_T  = compute_arrow_transform(arrow_start, arrow_end)
-                arrow_cpy.setCurrentTransform(arrow_T[0], arrow_T[1])
-                vis.add(f"arrow_{i}",arrow_cpy)
-                vis.setAttribute(f"arrow_{i}","color",(clamp(np.linalg.norm(force),1,0),0,0))
-                vis.hideLabel(f"arrow_{i}")
-                arrow_names.append(f"arrow_{i}")
+            # for i, force in enumerate(forces):
+            #     arrow_cpy = arrow.copy()
+            #     arrow_start = np.array(force_points[i])
+            #     arrow_end = np.array(-force) + arrow_start
+            #     arrow_T  = compute_arrow_transform(arrow_start, arrow_end)
+            #     arrow_cpy.setCurrentTransform(arrow_T[0], arrow_T[1])
+            #     vis.add(f"arrow_{i}",arrow_cpy)
+            #     vis.setAttribute(f"arrow_{i}","color",(clamp(np.linalg.norm(force),1,0),0,0))
+            #     vis.hideLabel(f"arrow_{i}")
+            #     arrow_names.append(f"arrow_{i}")
         vis.update()
+        vis.unlock()
         time.sleep(1.0/30.0)
