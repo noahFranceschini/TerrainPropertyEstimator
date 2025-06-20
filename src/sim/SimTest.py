@@ -67,14 +67,14 @@ def move_body(key,obj,step_size=0.0025):
 
 if __name__ == "__main__":
 
-    arrow_fn = "D:/Downloads/2025Research/TerrainPropertyEstimator/src/meshes"
+    arrow_fn = "D:/2025Research/TerrainPropertyEstimator/src/meshes"
 
     #load arrow mesh
     arrow = klampt.Geometry3D()
     arrow.loadFile(arrow_fn + "/arrow.stl")
     arrow.convert("TriangleMesh")
 
-    scoop_mesh_fn = "D:/Downloads/2025Research/TerrainPropertyEstimator/src/meshes/scoop_eih.STL" #"TerrainPropertyEstimator/src/meshes/scoop_eih.STL" 
+    scoop_mesh_fn = "D:/2025Research/TerrainPropertyEstimator/src/meshes/scoop_eih.STL" #"TerrainPropertyEstimator/src/meshes/scoop_eih.STL" 
     default_scoop_pos = (so3.from_moment([-1.13906602279157, -1.1888265740976542, 1.2987508365563492]),[0,0.0,0.17])
     
     heightmap_raw = np.zeros((400,400))
