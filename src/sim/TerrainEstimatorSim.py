@@ -4,7 +4,9 @@ import pdb
 from klampt import model, vis
 from klampt.math import se3, so3
 from klampt.math import vectorops as vo
-#from ..HeightMapEstimation.DynamicHeightMap import DynamicHeightMap
+import matplotlib.pyplot as plt
+from mpl_toolkits.mplot3d import Axes3D
+
 
 # 3rd degree lookup table for f_i
 c_table = np.array([
@@ -51,7 +53,7 @@ powers = np.array([
     [ 1,  0,  2],   # k = 19
     [ 1,  1,  1],   # k = 20
 ],dtype=int)
-# Access example: c[i, j] corresponds to c^{i}_{j}
+
 def is_valid_object(object: klampt.Geometry3D) -> bool:
     r"""
     Helper function to check if a loaded robot is valid.
@@ -97,19 +99,19 @@ def find_intersection(line1: list[list], line2: list[list]) -> list:
     x3,y3,z3 = line2[0]
     x4,y4,z4 = line2[1]
 
-    x_intersection = ((x1*y2 - y1*x2) * (x3-x4) - (x1-x2) * (x3*y4 - y3*x4)) / (x1-x2) * (y3-y4) - (y1-y2) * (x3-x4)
-    y_intersection = ((x1*y2 - y1*x2) * (y3-y4) - (y1-y2) * (x3*y4 - y3*x4)) / (x1-x2) * (y3-y4) - (y1-y2) * (x3-x4)
+    x_intersection = ((x1*y2 - y1*x2) * (x3-x4) - (x1-x2) * (x3*y4 - y3*x4)) / ((x1-x2) * (y3-y4) - (y1-y2) * (x3-x4))
+    y_intersection = ((x1*y2 - y1*x2) * (y3-y4) - (y1-y2) * (x3*y4 - y3*x4)) / ((x1-x2) * (y3-y4) - (y1-y2) * (x3-x4))
 
     # find z intersection based off of x,y intersection
-    if x4 != x3:
+    if abs(x4 - x3) > 1e-6:
         grad = (z4-z3)/(x4-x3)
         z_intersection = z3 + grad * (x_intersection - x3)
-    elif y4 != y3:
+    elif abs(y4 - y3) > 1e-6:
         grad = (z4-z3)/(y4-y3)
         z_intersection = z3 + grad * (y_intersection - y3)
     else:
-        z_intersection = z4
-    
+        z_intersection = (z4-z3)/2
+
     return [x_intersection, y_intersection, z_intersection]
 
 
@@ -172,6 +174,11 @@ def clip_polygons(bounding_vertices: list[list], intruding_vertices: list[list],
     """
     num_bounding_vert = len(bounding_vertices)
     curr_intruding_vert = intruding_vertices
+
+    # Check if any of the vertices are below the cell depth
+    intruding_vertices =np.array(intruding_vertices)
+    if np.all(intruding_vertices[:,2]> clip_height):
+        return []
     # For the current edge we are clipping on
     for bound_i in range(num_bounding_vert):
 
@@ -187,10 +194,8 @@ def clip_polygons(bounding_vertices: list[list], intruding_vertices: list[list],
             clippee_start = curr_intruding_vert[clippee_i]
             clippee_end = curr_intruding_vert[(clippee_i+1)%num_clippee_vert]
             clippee_segment = [clippee_start, clippee_end]
-
             new_vert_list += clip_edge(clipper_segment, clippee_segment, clip_height)
         curr_intruding_vert = new_vert_list
-
     return curr_intruding_vert
 
 def triangle_bounding_box(triangle_vertices: list[list]) -> list:
@@ -214,10 +219,59 @@ def triangle_bounding_box(triangle_vertices: list[list]) -> list:
     return [[min_x, min_y,0], [max_x,max_y,0]]
 
 def index_to_point(i,j,k,bbox,map_shape,pose):
+    # breakpoint()
+    bbox = np.array(bbox)
+    if bbox[1][0] < bbox[0][0] or bbox[1][1] < bbox[0][1]:
+        bbox = bbox.flip()
     x = bbox[0][0] + (bbox[1][0] - bbox[0][0]) * i / (map_shape[0]-1)
     y = bbox[0][1] + (bbox[1][1] - bbox[0][1]) * j / (map_shape[1]-1)
-    z = bbox[0][2] + (bbox[1][2] - bbox[0][2]) * k / (map_shape[2]-1)
+    if len(map_shape) == 2:
+        z = 0
+    else:    
+        z = bbox[0][2] + (bbox[1][2] - bbox[0][2]) * k / (map_shape[2]-1)
     return se3.apply(pose,(x,y,z))
+
+def compute_cell_corners(corner_coords: list[float], resolution: float) -> list[float]:
+    r"""
+    Given a cell corner in world coordinates, returns a list
+    of coordinates signifying the cell's entire corners in
+    clockwise order
+    """ 
+    corners = np.zeros((4,3))
+    
+    corners[0] = corner_coords
+    corners[1] = np.add(corner_coords, [0,resolution,0])
+    corners[2] = np.add(corner_coords, [resolution, resolution, 0])
+    corners[3] = np.add(corner_coords, [resolution, 0, 0])
+    return corners
+
+directions = [[1,0],
+              [1,1],
+              [0,1],
+              [-1,1],
+              [-1,0],
+              [-1,-1],
+              [0,-1],
+              [1,-1]]
+def pick_direction(force_dir: list[float]) -> tuple[int, int]:
+
+    angle = np.arctan2(force_dir[1],force_dir[0])
+    new_y = new_x = 0
+
+    # we only want to evaluate using positive angles
+    if angle < 0:
+        angle += 2 * np.pi - np.pi/8
+    else:
+        angle += np.pi/8
+
+    angle = angle % (2 * np.pi)
+
+    section = int(angle / (np.pi/4))
+
+    # choose new directions based off of 8 octrants
+    new_x, new_y = directions[section]
+
+    return new_x, new_y
 
 class TerrainEstimatorSim():
     r"""
@@ -397,10 +451,9 @@ class TerrainEstimatorSim():
         :return force_pts: (Nx3) list of point-force locations on the mesh in the mesh
                            frame
         :return forces: (Nx3) list of force vectors for each force point
-        :return gradients: TODO: Figure that out
+        :return gradients: TODO: Not implemented
         """
 
-        # All code adapted from 3D-RFT implementation found at: TODO: fill in paper link
         intruder_rigid_object_mesh = intruder_rigid_object.geometry().getTriangleMesh()
         curr_object_pose = intruder_rigid_object.getTransform()
 
@@ -408,7 +461,6 @@ class TerrainEstimatorSim():
         triangle_normals = np.array(intruder_rigid_object_mesh.triangleNoormals().copy())
 
         terrain_coefficients = terrain_material_params["zeta"]
-        #surface_friction = terrain_material_params["u_surf"]
         resolution = terrain_material_params["grid_resolution"]
         mins = terrain_material_params["grid_minimum"]
 
@@ -430,17 +482,34 @@ class TerrainEstimatorSim():
 
         # Compute depths by taking difference between heightmap heights and colliding ray
         heightmap_pose = terrain.getTransform()
+        heightmap_bbox = terrain.geometry().getBBTight()
 
         def point_to_index(mins: tuple,grid_pose:tuple ,resolution: float,point: tuple, shape: np.ndarray):
+            # breakpoint()
             world_to_grid = se3.inv(grid_pose)
             x_min,y_min = mins
-            x,y = point
+            if len(point) == 2:
+                x, y = point
+            elif len(point) == 3:
+                x, y, _ = point
             coords = [x,y,0]
             coords = se3.apply(world_to_grid,coords)
             i = int((coords[0] - x_min)/resolution)
             j = shape[1] - int((coords[1] - y_min)/resolution)
             return [i,j]
-        
+        def point_to_index_box(mins: tuple,grid_pose:tuple ,resolution: float,point: tuple, shape: np.ndarray):
+            # breakpoint()
+            world_to_grid = se3.inv(grid_pose)
+            x_min,y_min = mins
+            if len(point) == 2:
+                x, y = point
+            elif len(point) == 3:
+                x, y, _ = point
+            coords = [x,y,0]
+            coords = se3.apply(world_to_grid,coords)
+            i = int((coords[0] - x_min)/resolution)
+            j = int((coords[1] - y_min)/resolution)
+            return [i,j]
         heightmap = np.array(terrain.geometry().getHeightmap().heights)
         grid_z = heightmap_pose[1][2]
 
@@ -468,41 +537,59 @@ class TerrainEstimatorSim():
         triangle_normals = triangle_normals[valid]
         mesh_vertices = mesh_vertices[valid]
 
-        depths = np.array([heightmap[index_points[i][0], index_points[i][1]]+grid_z-triangle_centroids[i][2]  for i in range(len(triangle_centroids))])
-
         # Prune centroids that are not part of the leading edge
         leading_edge = np.where(np.sum(np.multiply(triangle_normals, centroid_velocities),axis=1) > 0, True, False).flatten()
-        depths = depths[leading_edge]
         triangle_centroids = triangle_centroids[leading_edge]
         centroid_velocities = centroid_velocities[leading_edge]
         triangle_normals = triangle_normals[leading_edge]
         mesh_vertices = mesh_vertices[leading_edge]
 
         # # break leading edge surfaces into cell-specific faces
-        scoop_bbox = intruder_rigid_object.geometry().getBB()
-        for i,face in enumerate(triangle_normals):
-            
-            # find bounding box for triangle support geometry
-            support_vertices = mesh_vertices[i]
-            bbox_triangle = triangle_bounding_box(support_vertices)
-            # bbox_indices = [point_to_index(mins, heightmap_pose, resolution, point, heightmap.shape) for point in bbox_triangle]
-            # bbox_shape = (bbox_indices[1][0] - bbox_indices[0][0], bbox_indices[1][1] - bbox_indices[0][1])
-            # print(bbox_indices)
-            # # for each cell in the bounding box of the support geometry,
-            # # find the geometry in that cell
-            # for i in range(bbox_indices[0][0], bbox_indices[1][0]+1):
-            #     for j in range(bbox_indices[1][0],bbox_indices[1][1]+1):
+        new_centroids = []
+        new_normals = []
+        new_vertices = []
+        new_velocities = []
+        prev_centroids = []
+        count = 0
 
-            #         cell_center = index_to_point(i,j,0,scoop_bbox,bbox_shape,curr_object_pose)
+        for i_vert,face in enumerate(mesh_vertices):
+            # find bounding box for triangle support geometry
+            support_vertices = np.array(face)
+            bbox_triangle = triangle_bounding_box(support_vertices)
+            bbox_indices = [point_to_index_box(mins, heightmap_pose, resolution, point, heightmap.shape) for point in bbox_triangle]
+
+            # for each cell in the bounding box of the support geometry,
+            # find the clipped geometry in that cell
+            for i in range(bbox_indices[0][0], bbox_indices[1][0]+1):
+                for j in range(bbox_indices[0][1],bbox_indices[1][1]+1):
+                    count += 1
+                    cell_base_corner = index_to_point(i,j,0, heightmap_bbox, heightmap.shape, heightmap_pose)
+                    cell_base_corner[2] =heightmap[i][j]
+                    cell_corners = compute_cell_corners(cell_base_corner,resolution)
+
+                    # Clip face geometry for this cell
+                    clipped_face = clip_polygons(cell_corners, face, heightmap[i,j])
+
+                    # no geometry here, skip over
+                    if len(clipped_face) < 3:
+                        continue
+                        
+                    new_vertices.append(clipped_face)
+
+                    # copy over normals and recompute velocity/centroids
+                    new_normals.append(triangle_normals[i_vert])
+                    new_centroids.append(np.average(clipped_face,axis=0))
+                    clipped_centroid_prev = convert_centroid_frame([new_centroids[-1]], se3.inv(curr_object_pose))
+                    clipped_centroid_prev = convert_centroid_frame(clipped_centroid_prev,prev_pose)
+                    new_velocities.append(new_centroids[-1] - clipped_centroid_prev[0])
+                    prev_centroids.append(clipped_centroid_prev[0])
+        
 
         # Prune centroids that are not under the surface
-        valid_depths = np.where(depths > 0, True, False)
-        depths = depths[valid_depths]
-        triangle_centroids = triangle_centroids[valid_depths]
-        centroid_velocities = centroid_velocities[valid_depths]
-        triangle_normals = triangle_normals[valid_depths]
-        mesh_vertices = mesh_vertices[valid_depths]
-
+        triangle_centroids = new_centroids
+        centroid_velocities = new_velocities
+        triangle_normals = new_normals
+        mesh_vertices = new_vertices
         def find_beta_angle(n,r,z):
             nz_dot = np.dot(n,z)
             nr_dot = np.dot(n,r)
@@ -521,7 +608,11 @@ class TerrainEstimatorSim():
 
         # Iterate through each centroid and find forces on body
         for i, centroid in enumerate(triangle_centroids):
-            #breakpoint()
+            x,y = point_to_index(mins,heightmap_pose,resolution,(centroid[0],centroid[1]),heightmap.shape)
+            depth = heightmap[x][y] + grid_z - centroid[2]
+
+            if depth <= 0:
+                continue
             # Step 4: Find local coordinate frame
             z = np.array([0,0,1.0])
             n = triangle_normals[i]/np.linalg.norm(triangle_normals[i])
@@ -551,6 +642,7 @@ class TerrainEstimatorSim():
             
             if psi == 0 and abs(abs(gamma) - np.pi/2) <= 1e-6:
                 r = np.array([1.0,0,0])
+                
             # Step 6: calculate f1, f2, f3
             beta = find_beta_angle(n,r,z) # Note: do this after potentially resetting r!
 
@@ -577,8 +669,6 @@ class TerrainEstimatorSim():
 
             # Step 8 - 10: Extract cell coefficient and calculate alpha
             # Note: step 9 and 10 might be switched in the paper implementation?
-            x,y = point_to_index(mins,heightmap_pose,resolution,(centroid[0],centroid[1]),heightmap.shape)
-
             zeta = terrain_coefficients[x][y]
             
             alpha_gen = alpha_r * r + alpha_theta * theta + alpha_z * z
@@ -586,7 +676,7 @@ class TerrainEstimatorSim():
             # Step 11: multply by depth, zeta, and area to obtain triangle-specific forces
             triangle_area = calculate_triangle_area(mesh_vertices[i])
             force_points.append(centroid)
-            forces.append(alpha_gen * zeta * triangle_area * depths[i])
+            forces.append(alpha_gen * zeta * triangle_area * depth)
             force_cells.append((x,y))
         
         # Use forces to update map
@@ -598,7 +688,7 @@ class TerrainEstimatorSim():
             x,y = force_cells[i]
             cell_force[x][y] += forces[i]
 
-        intruder_occupancy = intruder_rigid_object.geometry().convert("OccupancyGrid",0.005)
+        intruder_occupancy = intruder_rigid_object.geometry().convert("ImplicitSurface",0.005)
 
         intruder_occupancy.setCurrentTransform(curr_object_pose[0],curr_object_pose[1])
         def index_to_point_occupancy(i,j,k,bbox,map_shape,pose):
@@ -609,13 +699,16 @@ class TerrainEstimatorSim():
         
         # Step 1: Caclulate collisions and move soil based on overlapping
         # volumes
-        occupancy_grid = intruder_occupancy.getOccupancyGrid().getValues()
+        occupancy_grid = intruder_occupancy.getImplicitSurface().getValues()
         intruder_occupancy.setCurrentTransform(so3.identity(),[0,0,0])
 
-        #TODO: Fix index to point conversion
         pointed = []
         i_shape, j_shape, k_shape = occupancy_grid.shape
         bbox = intruder_occupancy.getBBTight()
+        occ_points = []
+
+        volume_moved = 0.005**3/resolution**2
+
         for i in range(i_shape):
             for j in range(j_shape):
                 for k in range(k_shape):
@@ -623,11 +716,11 @@ class TerrainEstimatorSim():
 
                     # if cell is occupied, check if it collides with
                     # terrain
-                    if occupied:
+                    if occupied < 0:
                         
                         # find occupancy index to point
                         point = index_to_point_occupancy(i,j,k,bbox,occupancy_grid.shape,curr_object_pose)
-
+                        occ_points.append(point)
                         #find that point's index w.r.t. heightmap index
                         x,y = point_to_index(mins,heightmap_pose,resolution,(point[0],point[1]),heightmap.shape)
 
@@ -641,25 +734,45 @@ class TerrainEstimatorSim():
                             if force_mag > 0:
                                 force = force/force_mag
 
-                            x_dir = np.rint(force[0])
-                            y_dir = np.rint(force[1])
+                            x_dir, y_dir = pick_direction(force)
 
                             new_x = int(np.clip(x+x_dir,0,heightmap.shape[0]-1))
                             new_y = int(np.clip(y+y_dir,0,heightmap.shape[1]-1))
 
-                            volume_moved = resolution
+                            # move material into new cells
                             map_update[x][y] -= volume_moved
                             map_update[new_x][new_y] += volume_moved
-                            #print(x,y,force,force_mag,map_update[x][y],map_update[new_x][new_y],new_x,new_y)
                     else:
                         continue
-        
+
+        heightmap_other = heightmap.copy() + map_update
+        heightmap_temp = heightmap_other.copy()
+
         # Step 2: Settle
-        # i_shape, j_shape = heightmap.shape
-        # for i in range(i_shape):
-        #     for j in range(j_shape):
-        #mesh_vertices.reshape((-1,3))
-        return map_update, bbox_triangle, forces, None
+        angle_of_repose = 0.593412 # angle of repose for sand in radians
+        flow_rate = resolution/8
+        i_shape, j_shape = heightmap.shape
+        for i in range(1,i_shape-1):
+            for j in range(1,j_shape-1):
+                for k in range(-1,2):
+                    for l in range(-1,2):
+
+                        #skip over the cell itself
+                        if k == 0 and l == 0:
+                            continue 
+
+                        slope = (heightmap_other[i+k][j+l] - heightmap_other[i][j])/resolution
+                    
+                        if slope < -np.tan(angle_of_repose):
+                            q = flow_rate * (slope + np.tan(angle_of_repose))
+                        elif slope > np.tan(angle_of_repose):
+                            q = flow_rate * (slope - np.tan(angle_of_repose))
+                        else:
+                            q = 0
+                        heightmap_temp[i][j] += q
+
+        map_update = heightmap_temp
+        return map_update, force_points, forces, None
 
     def _load_elements_from_world(self):
         r"""
@@ -672,8 +785,7 @@ class TerrainEstimatorSim():
             self.elements.update(world.getRobotsDict())
             self.elements.update(world.getRigidObjectsDict())
             self.elements.update(world.getTerrainsDict())
-        
-    
+
     def _load_important_names(self):
         r"""
         Extracts the names of surfaces used in the collision
